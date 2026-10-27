@@ -21,6 +21,14 @@ import {
 import { ensurePlan } from "./plan.js";
 import { createPlanUI } from "./plan-ui.js";
 import { schemas } from "./schema.js";
+import { CloudSync, installCloudGuards } from "./cloud-sync.js";
+let cloud;
+let booted = false;
+try {
+  const legacy = localStorage.getItem("cuchi-os-v1");
+  if (legacy && !localStorage.getItem("cuchi-legacy-backup-v1"))
+    localStorage.setItem("cuchi-legacy-backup-v1", legacy);
+} catch {}
 const repo = new Repository();
 let d = repo.data,
   route = location.hash.slice(1) || "dashboard",
@@ -114,6 +122,11 @@ const byId = (table, id) => d[table]?.find((x) => x.id === id),
   };
 const m = () => metrics(d, month);
 function toast(text) {
+  if (text.startsWith("Đã lưu") && cloud && cloud.status !== "saved")
+    text =
+      cloud.status === "saving"
+        ? "Đã cập nhật — đang ghi dữ liệu lên máy chủ…"
+        : "Đã cập nhật bản nháp; máy chủ chưa xác nhận lưu.";
   $("#toast").textContent = text;
   $("#toast").classList.add("show");
   clearTimeout(toast.timer);
@@ -157,11 +170,33 @@ function monthOptions() {
     )
     .join("");
 }
+function cloudBanner() {
+  const signIn = `<a class="btn small" href="/signin-with-chatgpt?return_to=${encodeURIComponent("/#" + route)}" target="_top">Đăng nhập để lưu dữ liệu</a>`;
+  if (!cloud || cloud.status === "connecting")
+    return `<div id="cloud-status" class="cloud-status">Đang kết nối database…</div>`;
+  const status = cloud.status;
+  let content;
+  if (status === "saved")
+    content = `<span><b>Đã lưu vào database</b> · Phiên bản ${cloud.revision} · ${cloud.updatedAt ? esc(new Date(cloud.updatedAt).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" })) : ""}</span><span class="muted">Đồng bộ giữa thiết bị khi đăng nhập</span>`;
+  else if (status === "saving")
+    content = `<span><b>Đang ghi dữ liệu lên máy chủ…</b> Chưa có xác nhận lưu.</span>`;
+  else if (status === "signed-out")
+    content = `<span><b>Đang xem dữ liệu mẫu.</b> Đăng nhập để mở dữ liệu của bạn và lưu vào database.</span>${signIn}`;
+  else if (status === "forbidden")
+    content = `<span><b>Tài khoản chưa có quyền quản lý dự án.</b></span><a href="/signout-with-chatgpt?return_to=%2F" target="_top" class="btn small secondary">Đổi tài khoản</a>`;
+  else
+    content = `<span><b>${status === "conflict" ? "Có thay đổi từ thiết bị khác" : status === "unavailable" ? "Chưa kết nối được database" : "Chưa lưu vào database"}.</b> ${esc(cloud.message || "Thay đổi được giữ trong bản nháp trên thiết bị.")}</span><div class="row-actions">${btn("Xuất bản nháp", "export", "", "small secondary")}${status === "conflict" ? btn("Tải bản máy chủ", "cloud-reload", "", "small secondary") : status === "unavailable" ? `<a href="/" class="btn small secondary">Kết nối lại</a>` : btn("Thử lưu lại", "cloud-retry", "", "small secondary")}</div>`;
+  return `<div id="cloud-status" class="cloud-status ${status}">${content}</div>`;
+}
+function refreshCloudStatus() {
+  const el = $("#cloud-status");
+  if (el) el.outerHTML = cloudBanner();
+}
 function render() {
   if (!nav.some((x) => x[0] === route) && route !== "report")
     route = "dashboard";
   $("#app").innerHTML =
-    `<aside class="sidebar"><a href="#dashboard" class="brand"><span class="logo">${icon("box")}</span><span>3D CỦ CHI<small>Print · Learn · Create</small></span></a><div class="nav-label">QUẢN TRỊ KHÔNG GIAN</div><nav class="nav">${nav.map(([r, t, i], index) => `${index === 8 ? '<div class="nav-label">KINH DOANH & PHÁT TRIỂN</div>' : ""}<a href="#${r}" class="${r === route ? "active" : ""}">${icon(i)}${t}${r === "jobs" ? `<span class="count">${d.jobs.filter((x) => ["Queued", "Printing"].includes(x.status)).length}</span>` : ""}</a>`).join("")}</nav><div class="nav-foot">${icon("lab")} <b>Thử nhỏ. Học nhanh.</b><br>${num(ensurePlan(d).studentCount)}+ học viên. Một maker hub tương lai.</div><div class="user"><div class="avatar">CC</div><div><b style="color:#e1e7f3">Không gian của bạn</b><br><span style="color:#73839f;font-size:9px">3D Lab · Củ Chi, TP.HCM</span></div></div></aside><main class="main"><header class="topbar"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Mở menu">${icon("menu")}</button><div class="crumb">Không gian làm việc <span>/</span> <b>${title()}</b></div><div class="top-actions"><span class="phase">Giai đoạn ${d.settings.phase} · ${esc(d.roadmap[d.settings.phase - 1]?.title || "—")}</span><select id="month-select" class="filter-select" aria-label="Tháng báo cáo">${monthOptions()}</select><button class="icon-btn" data-action="search" aria-label="Tìm kiếm toàn hệ thống">${icon("search")}</button><button class="icon-btn notification-dot" data-action="notifications" aria-label="Thông báo">${icon("bell")}</button>${btn(icon("plus") + " Thêm mới", "quick")}</div></header><div class="content">${pages[route]()}<footer class="footer"><span>3D CỦ CHI © 2026 · PRINT • LEARN • CREATE</span><span>${d.demo ? "DỮ LIỆU MẪU · " : ""}LƯU TRÊN TRÌNH DUYỆT · <a href="#settings">SAO LƯU DỮ LIỆU ↗</a></span></footer></div></main>`;
+    `<aside class="sidebar"><a href="#dashboard" class="brand"><span class="logo">${icon("box")}</span><span>3D CỦ CHI<small>Print · Learn · Create</small></span></a><div class="nav-label">QUẢN TRỊ KHÔNG GIAN</div><nav class="nav">${nav.map(([r, t, i], index) => `${index === 8 ? '<div class="nav-label">KINH DOANH & PHÁT TRIỂN</div>' : ""}<a href="#${r}" class="${r === route ? "active" : ""}">${icon(i)}${t}${r === "jobs" ? `<span class="count">${d.jobs.filter((x) => ["Queued", "Printing"].includes(x.status)).length}</span>` : ""}</a>`).join("")}</nav><div class="nav-foot">${icon("lab")} <b>Thử nhỏ. Học nhanh.</b><br>${num(ensurePlan(d).studentCount)}+ học viên. Một maker hub tương lai.</div><div class="user"><div class="avatar">CC</div><div><b style="color:#e1e7f3">Không gian của bạn</b><br><span style="color:#73839f;font-size:9px">3D Lab · Củ Chi, TP.HCM</span></div></div></aside><main class="main"><header class="topbar"><button class="icon-btn mobile-menu" data-action="menu" aria-label="Mở menu">${icon("menu")}</button><div class="crumb">Không gian làm việc <span>/</span> <b>${title()}</b></div><div class="top-actions"><span class="phase">Giai đoạn ${d.settings.phase} · ${esc(d.roadmap[d.settings.phase - 1]?.title || "—")}</span><select id="month-select" class="filter-select" aria-label="Tháng báo cáo">${monthOptions()}</select><button class="icon-btn" data-action="search" aria-label="Tìm kiếm toàn hệ thống">${icon("search")}</button><button class="icon-btn notification-dot" data-action="notifications" aria-label="Thông báo">${icon("bell")}</button>${btn(icon("plus") + " Thêm mới", "quick")}</div></header><div class="content">${cloudBanner()}${pages[route]()}<footer class="footer"><span>3D CỦ CHI © 2026 · PRINT • LEARN • CREATE</span><span>${d.demo ? "DỮ LIỆU MẪU · " : ""}${cloud?.canEdit ? "DỮ LIỆU MÁY CHỦ" : "XEM DỮ LIỆU MẪU"} · <a href="#settings">SAO LƯU DỮ LIỆU ↗</a></span></footer></div></main>`;
   bindPage();
 }
 const monthsBack = () => {
@@ -1188,7 +1223,7 @@ function settings() {
       )
       .join(
         "",
-      )}</div><button class="btn" style="margin-top:20px" type="submit">Lưu cấu hình</button></form></section><section class="card pad"><h2>Dữ liệu & sao lưu</h2><p style="font-size:11px;margin-top:16px">${d.demo ? "Hiện đang dùng dữ liệu mẫu." : "Đang sử dụng dữ liệu riêng của bạn."} Dữ liệu lưu tại trình duyệt trên thiết bị này. Không đồng bộ giữa thiết bị. Hãy xuất JSON thường xuyên.</p><div class="settings-actions">${btn(icon("download") + " Xuất JSON", "export", "", "secondary")}${btn(icon("file") + " Nhập JSON", "import", "", "secondary")}</div><input type="file" id="import-file" accept="application/json" hidden><div class="warn">Nhập bản sao lưu sẽ thay thế toàn bộ dữ liệu hiện tại sau khi xác nhận. Xuất dữ liệu trước khi xóa bộ nhớ trình duyệt hoặc đổi thiết bị.</div><div class="settings-actions">${btn("Bắt đầu với dữ liệu trống", "clear", "", "danger")}${btn("Khôi phục dữ liệu mẫu", "restore", "", "secondary")}</div><p class="muted" style="line-height:1.8">Không cần tài khoản để dùng trên thiết bị. Website hiện được chia sẻ công khai; dữ liệu cá nhân vẫn lưu trên trình duyệt của bạn. File STL/3MF và ảnh được lưu dưới dạng liên kết, không tải file lên máy chủ.</p></section></div><section class="card pad" style="margin-top:20px"><h2>Nguyên tắc ghi nhận của MVP</h2><p style="font-size:11px;line-height:2;margin-top:13px">Đơn hàng lưu giá vốn thực tế tại thời điểm nhập; thay đổi giá SKU không viết lại lịch sử đơn. Mỗi đơn một SKU. Workshop hiển thị doanh thu dự kiến, chỉ ghi nhận tiền khi nhập Thu nhập khác. Nhật ký bảo trì không tự tạo chi phí. Kho vật tư được điều chỉnh thủ công; filament tự trừ theo lệnh in. Vốn giải ngân là các hạng mục đầu tư, không nhập lặp vào chi phí. “Vốn + lợi nhuận giữ lại” là ước tính theo giá vốn phân bổ, không phải số dư ngân hàng. Vốn chưa giải ngân = vốn ban đầu − giải ngân đầu tư.</p></section>`
+      )}</div><button class="btn" style="margin-top:20px" type="submit">Lưu cấu hình</button></form></section><section class="card pad"><h2>Dữ liệu & sao lưu</h2><p style="font-size:11px;margin-top:16px">${d.demo ? "Hiện đang dùng dữ liệu mẫu." : "Đang sử dụng dữ liệu riêng của bạn."} Dữ liệu được lưu vào database máy chủ sau khi đăng nhập. Trình duyệt giữ bản dự phòng và bản nháp khi mất kết nối. Hãy kiểm tra trạng thái “Đã lưu vào database” trước khi đổi thiết bị.</p><div class="settings-actions">${btn(icon("download") + " Xuất JSON", "export", "", "secondary")}${btn(icon("file") + " Nhập JSON", "import", "", "secondary")}${btn("Tải dữ liệu trình duyệt cũ", "cloud-export-old", "", "secondary")}</div><input type="file" id="import-file" accept="application/json" hidden><div class="warn">Nhập bản sao lưu sẽ thay thế toàn bộ dữ liệu hiện tại sau khi xác nhận. Xuất dữ liệu trước khi xóa bộ nhớ trình duyệt hoặc đổi thiết bị.</div><div class="settings-actions">${btn("Bắt đầu với dữ liệu trống", "clear", "", "danger")}${btn("Khôi phục dữ liệu mẫu", "restore", "", "secondary")}</div><p class="muted" style="line-height:1.8">Khách chưa đăng nhập chỉ xem dữ liệu mẫu; tài khoản quản lý mới có thể sửa và lưu dữ liệu thật. Website hiện được chia sẻ công khai; dữ liệu thật chỉ truy cập được bằng tài khoản quản lý. File STL/3MF và ảnh được lưu dưới dạng liên kết, không tải file lên máy chủ.</p></section></div><section class="card pad" style="margin-top:20px"><h2>Nguyên tắc ghi nhận của MVP</h2><p style="font-size:11px;line-height:2;margin-top:13px">Đơn hàng lưu giá vốn thực tế tại thời điểm nhập; thay đổi giá SKU không viết lại lịch sử đơn. Mỗi đơn một SKU. Workshop hiển thị doanh thu dự kiến, chỉ ghi nhận tiền khi nhập Thu nhập khác. Nhật ký bảo trì không tự tạo chi phí. Kho vật tư được điều chỉnh thủ công; filament tự trừ theo lệnh in. Vốn giải ngân là các hạng mục đầu tư, không nhập lặp vào chi phí. “Vốn + lợi nhuận giữ lại” là ước tính theo giá vốn phân bổ, không phải số dư ngân hàng. Vốn chưa giải ngân = vốn ban đầu − giải ngân đầu tư.</p></section>`
   );
 }
 const pages = {
@@ -1702,6 +1737,22 @@ document.addEventListener("click", (e) => {
     id = b.dataset.id;
   try {
     switch (a) {
+      case "cloud-retry":
+        cloud.retry();
+        break;
+      case "cloud-reload":
+        confirmDialog(
+          "Tải bản dữ liệu máy chủ?",
+          "Hãy xuất JSON để giữ bản nháp trước khi tải. Bản đang hiển thị sẽ được thay bằng dữ liệu mới nhất từ database.",
+          () => cloud.reloadRemote().catch((e) => toast(e.message)),
+        );
+        break;
+      case "cloud-export-old": {
+        const raw = localStorage.getItem("cuchi-legacy-backup-v1");
+        if (raw) download("3d-cu-chi-du-lieu-trinh-duyet-cu.json", raw);
+        else toast("Không có bản dữ liệu trình duyệt cũ trên thiết bị này.");
+        break;
+      }
       case "menu":
         $(".sidebar").classList.toggle("open");
         break;
@@ -1929,15 +1980,6 @@ window.addEventListener("hashchange", () => {
   render();
   window.scrollTo(0, 0);
 });
-window.addEventListener("storage", (e) => {
-  if (e.key === "cuchi-os-v1" && e.newValue) {
-    try {
-      d = repo.data = validateImport(JSON.parse(e.newValue));
-      render();
-      toast("Đã đồng bộ từ tab khác trên thiết bị");
-    } catch {}
-  }
-});
 const planUI = createPlanUI({
   getData: () => d,
   esc,
@@ -1953,6 +1995,32 @@ const planUI = createPlanUI({
   render,
   operatingRoadmap,
 });
+cloud = new CloudSync(repo, {
+  canRefresh: () => !$(".modal"),
+  onChange: () => {
+    d = repo.data;
+    render();
+  },
+  onStatus: () => {
+    refreshCloudStatus();
+    if (booted && cloud?.status === "saved") toast("Đã lưu vào database");
+  },
+});
+installCloudGuards(cloud, toast);
+await cloud.start();
+d = repo.data;
+booted = true;
 render();
+setInterval(() => cloud.refresh(), 20000);
+window.addEventListener("online", () => cloud.retry());
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) cloud.refresh();
+});
+window.addEventListener("beforeunload", (e) => {
+  if (cloud.pending || cloud.inflight) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 if (repo.recovered)
   toast("Dữ liệu cũ không đọc được. Đã khởi tạo dữ liệu mẫu.");

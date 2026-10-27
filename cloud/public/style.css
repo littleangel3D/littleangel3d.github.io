@@ -1776,3 +1776,4 @@ label {
     padding: 0 16px;
   }
 }
+.cloud-status{display:flex;gap:15px;align-items:center;justify-content:space-between;background:#eaf7ef;border:1px solid #cee8d8;border-radius:8px;padding:13px 16px;color:#3f805d;font-size:10px;line-height:1.8;margin-bottom:22px}.cloud-status.signed-out,.cloud-status.connecting{background:#edf3ff;color:#56729e;border-color:#d9e4f8}.cloud-status.saving{background:#fff6e9;color:#9f7c3d;border-color:#f0e2c9}.cloud-status.error,.cloud-status.conflict,.cloud-status.unavailable,.cloud-status.forbidden{background:#fff0f0;border-color:#f2d5d8;color:#af5e68}.cloud-status .row-actions{flex-shrink:0}@media(max-width:780px){.cloud-status{align-items:flex-start;flex-direction:column;gap:10px}}

@@ -10,7 +10,7 @@ import {
   validateImport,
   productScore,
   opportunity,
-} from "../model.js";
+} from "../public/model.js";
 test("capital allocation is exactly 30 million", () => {
   assert.equal(
     seed().budget.reduce((s, r) => s + r.budget, 0),

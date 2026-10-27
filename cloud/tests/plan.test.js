@@ -5,8 +5,8 @@ import {
   ensurePlan,
   validatePlan,
   editPhase,
-} from "../plan.js";
-import { seed, Repository, validateImport, metrics } from "../model.js";
+} from "../public/plan.js";
+import { seed, Repository, validateImport, metrics } from "../public/model.js";
 test("image plan totals match 23–29 million and contains all eight sections", () => {
   const p = validatePlan(defaultPlan());
   assert.equal(
